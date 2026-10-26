@@ -2,6 +2,7 @@ package io.github.mohammedanasasif.moneymatters.data
 
 import io.github.mohammedanasasif.moneymatters.parse.Categories
 import io.github.mohammedanasasif.moneymatters.parse.ParsedTxn
+import io.github.mohammedanasasif.moneymatters.parse.UpiParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -91,6 +92,37 @@ class TransactionRepository(
             )
         )
         true
+    }
+
+    /**
+     * Runs every stored auto-captured payment through the current parser again, so parser
+     * fixes also correct what was already logged (e.g. a credit that was read as a debit).
+     */
+    suspend fun reparseCaptured() = captureLock.withLock {
+        for (t in dao.getAll()) {
+            if (t.source == TxnSource.MANUAL_CASH) continue
+            val raw = t.rawText ?: continue
+            val parsed = UpiParser.parse(raw, requireUpiMarker = t.source == TxnSource.SMS)
+            if (parsed == null) {
+                // Now recognised as not-a-payment. Keep anything the user already confirmed.
+                if (t.status == TxnStatus.NEEDS_REVIEW) dao.delete(t)
+                continue
+            }
+            if (parsed.type == TxnType.CREDIT && !prefs.logCredits) {
+                dao.delete(t)
+                continue
+            }
+            val updated = t.copy(
+                amountPaise = parsed.amountPaise,
+                type = parsed.type,
+                payee = parsed.payee,
+                vpa = parsed.vpa,
+                upiRef = parsed.upiRef ?: t.upiRef,
+                category = t.category ?: Categories.guess(parsed.payee, parsed.vpa),
+                status = if (t.status == TxnStatus.CONFIRMED || parsed.confident) TxnStatus.CONFIRMED else TxnStatus.NEEDS_REVIEW,
+            )
+            if (updated != t) dao.update(updated)
+        }
     }
 
     suspend fun exportCsv(out: OutputStream) = withContext(Dispatchers.IO) {

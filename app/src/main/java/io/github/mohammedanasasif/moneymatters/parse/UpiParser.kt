@@ -22,6 +22,9 @@ data class ParsedTxn(
  * When you add support for a new format, add the sample to UpiParserTest.
  */
 object UpiParser {
+    /** Bump when parsing changes, so stored payments are re-checked on the next app start. */
+    const val VERSION = 2
+
     private val I = RegexOption.IGNORE_CASE
 
     private const val NUM = """([0-9][0-9,]*(?:\.[0-9]{1,2})?)"""
@@ -38,6 +41,17 @@ object UpiParser {
     private val DEBIT = Regex("""\b(debited|debit|paid|sent|spent|withdrawn|transferred|payment of|txn of)\b""", I)
     private val CREDIT = Regex("""\b(credited|received|deposited|refunded|refund|reversed)\b""", I)
 
+    // Phrases that settle the direction on their own, because they say whose money moved.
+    // Needed for texts like "Ramesh paid you ₹1", where "paid" alone would look like a debit.
+    private val STRONG_CREDIT = Regex(
+        """\b(paid you|sent you|you(?:'ve| have)? received|money received|received from|credited (?:to|in|into) (?:your|ur)|(?:is|has been|was) credited|deposited (?:in|to|into) (?:your|ur))\b""",
+        I,
+    )
+    private val STRONG_DEBIT = Regex(
+        """\b(you paid|you sent|you have paid|you have sent|debited from (?:your|ur)|(?:is|has been|was) debited|paid to|sent to)\b""",
+        I,
+    )
+
     private val REF = Regex("""(?:ref(?:erence)?|rrn|utr|txn|transaction|upi)[\s\w.:#/-]{0,15}?(?<!\d)(\d{12})(?!\d)""", I)
     private val ANY_12_DIGITS = Regex("""(?<!\d)(\d{12})(?!\d)""")
 
@@ -50,6 +64,7 @@ object UpiParser {
     private val PAYEE_BEFORE_CREDITED = Regex("""[;.]\s*([A-Za-z][A-Za-z0-9 .&'_-]{1,40}?)\s+credited\b""", I)
     private val PAYEE_TO = Regex("""\b(?:paid to|sent to|trf to|transferred to|to vpa|to)\s+$NAME$STOP""", I)
     private val PAYEE_FROM = Regex("""\b(?:received from|from vpa|from)\s+$NAME$STOP""", I)
+    private val PAYEE_BEFORE_PAID_YOU = Regex("""(?:^|[.:]\s*)([A-Za-z][A-Za-z0-9 &'_-]{1,40}?)\s+(?:paid|sent) you\b""", I)
 
     private val BAD_PAYEE = Regex(
         """^(?:(?:a/?c|ac|acct|account|your|you|the|bank|card|mobile|block|dispute)\b|\d+(?:\s|$))""",
@@ -74,10 +89,7 @@ object UpiParser {
         val amountMatch = AMOUNT_AFTER_VERB.find(t) ?: AMOUNT.find(t) ?: return null
         val amount = toPaise(amountMatch.groupValues[1]) ?: return null
 
-        val debitAt = DEBIT.find(t)?.range?.first ?: Int.MAX_VALUE
-        val creditAt = CREDIT.find(t)?.range?.first ?: Int.MAX_VALUE
-        if (debitAt == Int.MAX_VALUE && creditAt == Int.MAX_VALUE) return null
-        val type = if (debitAt < creditAt) TxnType.DEBIT else TxnType.CREDIT
+        val type = direction(t) ?: return null
 
         val ref = (REF.find(t) ?: ANY_12_DIGITS.find(t))?.groupValues?.get(1)
         val payee = findPayee(t, type)
@@ -92,11 +104,24 @@ object UpiParser {
         )
     }
 
+    /** Strong phrases win; otherwise whichever of debit/credit is mentioned first. */
+    private fun direction(t: String): TxnType? {
+        val strongCredit = STRONG_CREDIT.find(t)?.range?.first
+        val strongDebit = STRONG_DEBIT.find(t)?.range?.first
+        if (strongCredit != null && (strongDebit == null || strongCredit < strongDebit)) return TxnType.CREDIT
+        if (strongDebit != null) return TxnType.DEBIT
+
+        val debitAt = DEBIT.find(t)?.range?.first ?: Int.MAX_VALUE
+        val creditAt = CREDIT.find(t)?.range?.first ?: Int.MAX_VALUE
+        if (debitAt == Int.MAX_VALUE && creditAt == Int.MAX_VALUE) return null
+        return if (debitAt < creditAt) TxnType.DEBIT else TxnType.CREDIT
+    }
+
     private fun findPayee(t: String, type: TxnType): String? {
         val patterns = if (type == TxnType.DEBIT) {
             listOf(PAYEE_UPI_PATH, PAYEE_BEFORE_CREDITED, PAYEE_TO)
         } else {
-            listOf(PAYEE_UPI_PATH, PAYEE_FROM)
+            listOf(PAYEE_UPI_PATH, PAYEE_BEFORE_PAID_YOU, PAYEE_FROM)
         }
         for (pattern in patterns) {
             for (match in pattern.findAll(t)) {

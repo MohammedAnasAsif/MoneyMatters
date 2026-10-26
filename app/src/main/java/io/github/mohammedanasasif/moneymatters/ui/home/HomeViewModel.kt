@@ -20,13 +20,18 @@ import kotlinx.coroutines.launch
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val repository = (app as MoneyMattersApp).repository
 
-    private val range = MutableStateFlow(Range.M1)
-    private val mode = MutableStateFlow(ListMode.RECENT)
-    private val filter = MutableStateFlow<Filter?>(null)
+    private val detailId = MutableStateFlow<String?>(null)
+    private val detailRange = MutableStateFlow(Range.M1)
 
-    val state: StateFlow<HomeState?> =
-        combine(repository.all, range, mode, filter) { all, r, m, f ->
-            buildHomeState(all, r, m, f, System.currentTimeMillis())
+    val home: StateFlow<HomeState?> =
+        repository.all
+            .map { buildHomeState(it, System.currentTimeMillis()) }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val detail: StateFlow<DetailState?> =
+        combine(repository.all, detailId, detailRange) { all, id, range ->
+            id?.let { buildDetailState(all, it, range, System.currentTimeMillis()) }
         }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -36,17 +41,17 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             .map { list -> list.filter { it.status == TxnStatus.NEEDS_REVIEW } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun setRange(value: Range) {
-        range.value = value
+    fun openDetail(id: String) {
+        detailRange.value = Range.M1
+        detailId.value = id
     }
 
-    fun setMode(value: ListMode) {
-        mode.value = value
-        filter.value = null
+    fun closeDetail() {
+        detailId.value = null
     }
 
-    fun setFilter(value: Filter?) {
-        filter.value = value
+    fun setDetailRange(value: Range) {
+        detailRange.value = value
     }
 
     fun addManual(amountPaise: Long, type: TxnType, payee: String?, category: String?, timestamp: Long) {

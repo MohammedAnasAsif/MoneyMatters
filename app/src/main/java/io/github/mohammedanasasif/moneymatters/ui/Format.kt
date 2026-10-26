@@ -27,6 +27,18 @@ fun formatInr(paise: Long): String {
     return "₹$grouped$decimals"
 }
 
+/** "+₹1,200" / "−₹300", or as a percentage of [previous] ("+12.5%", "New" when there was nothing before). */
+fun formatChange(change: Long, previous: Long, asPercent: Boolean): String {
+    val sign = when {
+        change > 0 -> "+"
+        change < 0 -> "−"
+        else -> ""
+    }
+    if (!asPercent) return sign + formatInr(change)
+    if (previous == 0L) return if (change == 0L) "0%" else "New"
+    return sign + String.format(Locale.US, "%.1f%%", abs(change) * 100.0 / previous)
+}
+
 fun formatDateTime(millis: Long): String =
     fullFormat.format(Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()))
 

@@ -30,10 +30,12 @@ If a payment shows up in both, it's stored once (matched on the UPI reference nu
 
 ## The screen
 
-- The big number is what you've spent in the selected period (1D / 1W / 1M / 3M / 1Y / ALL). The pill shows the change against the period before.
-- The line is cumulative spend. **Green** means you're spending less than last period and **red** means more. The dotted line marks last period's total.
-- Drag a finger across the chart to see your running total at any moment.
-- Switch the list between **Recent**, **Payees** and **Categories**. Tap a payee or category to narrow the chart to it.
+The home screen is laid out like the Apple Stocks watchlist:
+
+- Each row is a "ticker": **Spent**, **Received**, and one per category (Food, Transport…). The number is this month's total. The pill is the change against the same days of last month: **red** is bad (more spent, less received) and **green** is good. Tap a pill to switch between ₹ and %.
+- Each sparkline shows the month building up, with a dotted line at last month's level.
+- Pull up the **Transactions** sheet at the bottom (where Stocks has its news) to see the latest payments. Money in shows green with **+** and money out red with **−**.
+- Tap a row to open it full screen, with a big chart you can drag across and 1D / 1W / 1M / 3M / 1Y / ALL ranges.
 
 ## Building
 

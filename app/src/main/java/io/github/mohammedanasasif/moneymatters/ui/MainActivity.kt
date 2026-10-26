@@ -11,13 +11,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.mohammedanasasif.moneymatters.ui.home.HomeScreen
 import io.github.mohammedanasasif.moneymatters.ui.home.HomeViewModel
 import io.github.mohammedanasasif.moneymatters.ui.home.ReviewScreen
+import io.github.mohammedanasasif.moneymatters.ui.home.TickerDetailScreen
 import io.github.mohammedanasasif.moneymatters.ui.settings.SettingsScreen
 import io.github.mohammedanasasif.moneymatters.ui.theme.AppColors
 import io.github.mohammedanasasif.moneymatters.ui.theme.MoneyMattersTheme
@@ -35,13 +36,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { HOME, SETTINGS, REVIEW }
+private enum class Screen { HOME, DETAIL, SETTINGS, REVIEW }
 
 @Composable
 private fun AppRoot() {
     val vm: HomeViewModel = viewModel()
-    var screen by rememberSaveable { mutableStateOf(Screen.HOME) }
-    BackHandler(enabled = screen != Screen.HOME) { screen = Screen.HOME }
+    // Plain remember: the detail screen's selection lives in the ViewModel and isn't restored.
+    var screen by remember { mutableStateOf(Screen.HOME) }
+    val goHome = {
+        vm.closeDetail()
+        screen = Screen.HOME
+    }
+    BackHandler(enabled = screen != Screen.HOME) { goHome() }
 
     Surface(color = AppColors.Background, modifier = Modifier.fillMaxSize()) {
         when (screen) {
@@ -49,9 +55,14 @@ private fun AppRoot() {
                 vm = vm,
                 onOpenSettings = { screen = Screen.SETTINGS },
                 onOpenReview = { screen = Screen.REVIEW },
+                onOpenTicker = { id ->
+                    vm.openDetail(id)
+                    screen = Screen.DETAIL
+                },
             )
-            Screen.SETTINGS -> SettingsScreen(onBack = { screen = Screen.HOME })
-            Screen.REVIEW -> ReviewScreen(vm = vm, onBack = { screen = Screen.HOME })
+            Screen.DETAIL -> TickerDetailScreen(vm = vm, onBack = goHome)
+            Screen.SETTINGS -> SettingsScreen(onBack = goHome)
+            Screen.REVIEW -> ReviewScreen(vm = vm, onBack = goHome)
         }
     }
 }

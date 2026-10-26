@@ -19,8 +19,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -51,21 +54,51 @@ fun AmountPill(text: String, color: Color, modifier: Modifier = Modifier) {
     }
 }
 
+/** Watchlist sparkline: line, fading fill underneath, dashed line at last period's level. */
 @Composable
-fun Sparkline(values: List<Long>, color: Color, modifier: Modifier = Modifier) {
+fun Sparkline(values: List<Long>, baseline: Long?, color: Color, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         if (values.size < 2) return@Canvas
-        val max = values.max()
-        val min = values.min()
-        val span = (max - min).coerceAtLeast(1L).toFloat()
-        val path = Path()
-        values.forEachIndexed { i, v ->
-            val x = size.width * i / (values.size - 1)
-            val y = size.height - (v - min) / span * size.height
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        val max = maxOf(values.max(), baseline ?: 0L).coerceAtLeast(1L).toFloat()
+        val top = 2.dp.toPx()
+        val bottom = size.height
+        fun y(v: Long) = bottom - v / max * (bottom - top)
+        fun x(i: Int) = size.width * i / (values.size - 1)
+
+        if (baseline != null && baseline > 0) {
+            drawLine(
+                color = AppColors.Muted.copy(alpha = 0.7f),
+                start = Offset(0f, y(baseline)),
+                end = Offset(size.width, y(baseline)),
+                strokeWidth = 1.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 3.dp.toPx())),
+            )
         }
-        drawPath(path, color, style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+        val line = Path()
+        val fill = Path()
+        values.forEachIndexed { i, v ->
+            if (i == 0) {
+                line.moveTo(x(i), y(v))
+                fill.moveTo(x(i), bottom)
+                fill.lineTo(x(i), y(v))
+            } else {
+                line.lineTo(x(i), y(v))
+                fill.lineTo(x(i), y(v))
+            }
+        }
+        fill.lineTo(x(values.size - 1), bottom)
+        fill.close()
+        drawPath(fill, Brush.verticalGradient(listOf(color.copy(alpha = 0.35f), Color.Transparent), startY = top, endY = bottom))
+        drawPath(line, color, style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
+}
+
+/** Green when the change is good for you, red when it isn't, grey when nothing changed. */
+fun changeColor(change: Long, upIsGood: Boolean): Color = when {
+    change == 0L -> AppColors.SurfaceHighest
+    (change > 0) == upIsGood -> AppColors.Up
+    else -> AppColors.Down
 }
 
 /** Text-only segmented control, like the 1D / 1W / 1M row in Stocks. */

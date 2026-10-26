@@ -1,13 +1,12 @@
 package io.github.mohammedanasasif.moneymatters.ui.home
 
 import io.github.mohammedanasasif.moneymatters.data.Transaction
-import io.github.mohammedanasasif.moneymatters.data.TxnSource
 import io.github.mohammedanasasif.moneymatters.data.TxnStatus
 import io.github.mohammedanasasif.moneymatters.data.TxnType
-import io.github.mohammedanasasif.moneymatters.data.displayName
-import io.github.mohammedanasasif.moneymatters.ui.formatShort
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 enum class Range(val label: String, val title: String) {
     D1("1D", "Today"),
@@ -18,55 +17,125 @@ enum class Range(val label: String, val title: String) {
     ALL("ALL", "All time"),
 }
 
-enum class ListMode(val label: String) {
-    RECENT("Recent"),
-    PAYEES("Payees"),
-    CATEGORIES("Categories"),
-}
+enum class TickerKind { SPENT, RECEIVED, CATEGORY }
 
-/** Narrows the whole screen (chart included) to one payee or category. */
-data class Filter(val mode: ListMode, val key: String)
+const val UNCATEGORISED = "Uncategorised"
 
-data class ChartPoint(val time: Long, val value: Long)
-
-data class ListRow(
-    val key: String,
+/**
+ * One row of the watchlist, like a stock in Apple Stocks: a name, this month's total
+ * as the "price", and the change against the same days of last month.
+ */
+data class Ticker(
+    val id: String,
+    val kind: TickerKind,
     val title: String,
     val subtitle: String,
-    val amountPaise: Long,
-    val isCredit: Boolean,
+    val value: Long,
+    val previous: Long,
+    /** Cumulative total across the month so far, for the sparkline. */
     val spark: List<Long>,
-    val transaction: Transaction?,
-    val filter: Filter?,
-)
+) {
+    val change: Long get() = value - previous
+
+    /** More money received is good; more money spent is not. */
+    val upIsGood: Boolean get() = kind == TickerKind.RECEIVED
+}
 
 data class HomeState(
-    val range: Range,
-    val mode: ListMode,
-    val filter: Filter?,
-    val title: String,
-    val totalSpent: Long,
-    /** Spend in the equally long period just before this one; null for ALL. */
-    val previousSpent: Long?,
-    val rangeStart: Long,
-    val rangeEnd: Long,
-    val points: List<ChartPoint>,
-    val rows: List<ListRow>,
+    val dateLabel: String,
+    val monthLabel: String,
+    val tickers: List<Ticker>,
+    val recent: List<Transaction>,
     val reviewCount: Int,
     val hasAnyData: Boolean,
 )
 
-private const val DAY = 86_400_000L
+data class ChartPoint(val time: Long, val value: Long)
 
-fun buildHomeState(
-    all: List<Transaction>,
-    range: Range,
-    mode: ListMode,
-    filter: Filter?,
-    now: Long,
-): HomeState {
+data class DetailState(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val upIsGood: Boolean,
+    val range: Range,
+    val value: Long,
+    /** Total in the equally long period just before this one; null for ALL. */
+    val previous: Long?,
+    val rangeStart: Long,
+    val rangeEnd: Long,
+    val points: List<ChartPoint>,
+    val transactions: List<Transaction>,
+)
+
+private const val DAY = 86_400_000L
+private val dayMonth = DateTimeFormatter.ofPattern("d MMMM", Locale.ENGLISH)
+private val monthName = DateTimeFormatter.ofPattern("MMMM", Locale.ENGLISH)
+
+fun tickerMatches(id: String, t: Transaction): Boolean = when {
+    id == "spent" -> t.type == TxnType.DEBIT
+    id == "received" -> t.type == TxnType.CREDIT
+    id.startsWith("cat:") -> t.type == TxnType.DEBIT && (t.category ?: UNCATEGORISED) == id.removePrefix("cat:")
+    else -> false
+}
+
+private fun tickerTitle(id: String): String = when {
+    id == "spent" -> "Spent"
+    id == "received" -> "Received"
+    else -> id.removePrefix("cat:")
+}
+
+fun buildHomeState(all: List<Transaction>, now: Long): HomeState {
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val monthStart = today.withDayOfMonth(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    val previousStart = today.minusMonths(1).withDayOfMonth(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    // Compare like with like: the first N days of this month against the first N days of last month.
+    val previousEnd = minOf(previousStart + (now - monthStart), monthStart)
     val confirmed = all.filter { it.status == TxnStatus.CONFIRMED }
-    val scoped = if (filter == null) confirmed else confirmed.filter { groupKey(it, filter.mode) == filter.key }
+
+    fun ticker(id: String, kind: TickerKind, subtitle: (Int) -> String): Ticker {
+        val matching = confirmed.filter { tickerMatches(id, it) }
+        val current = matching.filter { it.timestamp in monthStart..now }
+        val previous = matching.filter { it.timestamp >= previousStart && it.timestamp < previousEnd }
+        return Ticker(
+            id = id,
+            kind = kind,
+            title = tickerTitle(id),
+            subtitle = subtitle(current.size),
+            value = current.sumOf { it.amountPaise },
+            previous = previous.sumOf { it.amountPaise },
+            spark = cumulative(current, monthStart, now),
+        )
+    }
+
+    fun payments(n: Int) = if (n == 1) "1 payment this month" else "$n payments this month"
+
+    val tickers = buildList {
+        add(ticker("spent", TickerKind.SPENT) { "All UPI and cash spending" })
+        if (confirmed.any { it.type == TxnType.CREDIT }) {
+            add(ticker("received", TickerKind.RECEIVED) { "Money in" })
+        }
+        confirmed
+            .filter { it.type == TxnType.DEBIT && it.timestamp >= previousStart }
+            .map { it.category ?: UNCATEGORISED }
+            .distinct()
+            .map { ticker("cat:$it", TickerKind.CATEGORY, ::payments) }
+            .sortedByDescending { it.value }
+            .forEach { add(it) }
+    }
+
+    return HomeState(
+        dateLabel = dayMonth.format(today),
+        monthLabel = monthName.format(today),
+        tickers = tickers,
+        recent = confirmed.sortedByDescending { it.timestamp }.take(200),
+        reviewCount = all.count { it.status == TxnStatus.NEEDS_REVIEW },
+        hasAnyData = all.isNotEmpty(),
+    )
+}
+
+fun buildDetailState(all: List<Transaction>, id: String, range: Range, now: Long): DetailState {
+    val matching = all.filter { it.status == TxnStatus.CONFIRMED && tickerMatches(id, it) }
 
     val start = when (range) {
         Range.D1 -> LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -74,94 +143,47 @@ fun buildHomeState(
         Range.M1 -> now - 30 * DAY
         Range.M3 -> now - 90 * DAY
         Range.Y1 -> now - 365 * DAY
-        Range.ALL -> (scoped.minOfOrNull { it.timestamp } ?: (now - 30 * DAY)).coerceAtMost(now - DAY)
+        Range.ALL -> (matching.minOfOrNull { it.timestamp } ?: (now - 30 * DAY)).coerceAtMost(now - DAY)
     }
 
-    val inRange = scoped.filter { it.timestamp in start..now }
-    val debits = inRange.filter { it.type == TxnType.DEBIT }.sortedBy { it.timestamp }
-    val total = debits.sumOf { it.amountPaise }
-
+    val inRange = matching.filter { it.timestamp in start..now }.sortedBy { it.timestamp }
     val previous = if (range == Range.ALL) {
         null
     } else {
         val length = now - start
-        scoped.filter { it.type == TxnType.DEBIT && it.timestamp >= start - length && it.timestamp < start }
-            .sumOf { it.amountPaise }
+        matching.filter { it.timestamp >= start - length && it.timestamp < start }.sumOf { it.amountPaise }
     }
 
-    // Cumulative spend over the period: a line that only goes up, like a share price on a good day.
     val points = buildList {
         add(ChartPoint(start, 0))
         var running = 0L
-        for (t in debits) {
+        for (t in inRange) {
             running += t.amountPaise
             add(ChartPoint(t.timestamp, running))
         }
         add(ChartPoint(now, running))
     }
 
-    val rowMode = if (filter != null) ListMode.RECENT else mode
-    val rows = when (rowMode) {
-        ListMode.RECENT -> inRange.sortedByDescending { it.timestamp }.map { t ->
-            ListRow(
-                key = "t${t.id}",
-                title = t.displayName(),
-                subtitle = subtitle(t),
-                amountPaise = t.amountPaise,
-                isCredit = t.type == TxnType.CREDIT,
-                spark = emptyList(),
-                transaction = t,
-                filter = null,
-            )
-        }
-        ListMode.PAYEES, ListMode.CATEGORIES -> debits.groupBy { groupKey(it, rowMode) }
-            .map { (key, txns) ->
-                ListRow(
-                    key = "g$key",
-                    title = key,
-                    subtitle = if (txns.size == 1) "1 payment" else "${txns.size} payments",
-                    amountPaise = txns.sumOf { it.amountPaise },
-                    isCredit = false,
-                    spark = sparkline(txns, start, now),
-                    transaction = null,
-                    filter = Filter(rowMode, key),
-                )
-            }
-            .sortedByDescending { it.amountPaise }
-    }
-
-    return HomeState(
+    return DetailState(
+        id = id,
+        title = tickerTitle(id),
+        subtitle = when {
+            id == "spent" -> "All spending"
+            id == "received" -> "Money in"
+            else -> "Category"
+        },
+        upIsGood = id == "received",
         range = range,
-        mode = mode,
-        filter = filter,
-        title = "${filter?.key ?: "Spent"} · ${range.title}",
-        totalSpent = total,
-        previousSpent = previous,
+        value = inRange.sumOf { it.amountPaise },
+        previous = previous,
         rangeStart = start,
         rangeEnd = now,
         points = points,
-        rows = rows,
-        reviewCount = all.count { it.status == TxnStatus.NEEDS_REVIEW },
-        hasAnyData = all.isNotEmpty(),
+        transactions = inRange.reversed(),
     )
 }
 
-private fun groupKey(t: Transaction, mode: ListMode): String = when (mode) {
-    ListMode.PAYEES -> t.displayName()
-    ListMode.CATEGORIES -> t.category ?: "Uncategorised"
-    ListMode.RECENT -> ""
-}
-
-private fun subtitle(t: Transaction): String {
-    val via = when {
-        t.type == TxnType.CREDIT -> "Received"
-        t.source == TxnSource.MANUAL_CASH -> "Cash"
-        else -> "UPI"
-    }
-    return "${formatShort(t.timestamp)} · $via"
-}
-
-private fun sparkline(txns: List<Transaction>, start: Long, end: Long, buckets: Int = 16): List<Long> {
+private fun cumulative(txns: List<Transaction>, start: Long, end: Long, buckets: Int = 24): List<Long> {
     val span = (end - start).coerceAtLeast(1L)
     val sums = LongArray(buckets)
     for (t in txns) {
@@ -169,5 +191,5 @@ private fun sparkline(txns: List<Transaction>, start: Long, end: Long, buckets: 
         sums[i] += t.amountPaise
     }
     var running = 0L
-    return sums.map { running += it; running }
+    return listOf(0L) + sums.map { running += it; running }
 }

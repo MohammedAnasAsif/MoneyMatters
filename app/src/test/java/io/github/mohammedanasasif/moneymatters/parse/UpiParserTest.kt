@@ -82,6 +82,44 @@ class UpiParserTest {
     }
 
     @Test
+    fun paidYouNotificationIsCredit() {
+        val p = UpiParser.parse("Payment received. Ramesh paid you ₹1", requireUpiMarker = false)!!
+        assertEquals(100L, p.amountPaise)
+        assertEquals(TxnType.CREDIT, p.type)
+        assertEquals("Ramesh", p.payee)
+    }
+
+    @Test
+    fun hdfcMoneyReceivedIsCredit() {
+        val p = UpiParser.parse(
+            "Money Received - INR 1.00 in HDFC Bank A/c xx1234 on 26-10-26 by A/c linked to VPA " +
+                "9876543210@ybl (UPI Ref No 429912345678)"
+        )!!
+        assertEquals(100L, p.amountPaise)
+        assertEquals(TxnType.CREDIT, p.type)
+        assertEquals("429912345678", p.upiRef)
+    }
+
+    @Test
+    fun iciciIsCreditedFromName() {
+        val p = UpiParser.parse(
+            "Dear Customer, Acct XX123 is credited with Rs 1.00 on 26-Oct-26 from RAMESH. UPI:429912345678-ICICI Bank."
+        )!!
+        assertEquals(100L, p.amountPaise)
+        assertEquals(TxnType.CREDIT, p.type)
+        assertEquals("Ramesh", p.payee)
+    }
+
+    @Test
+    fun debitThatMentionsPayeeCreditedStaysDebit() {
+        val p = UpiParser.parse(
+            "Rs.100 debited from your A/c XX1234 and credited to swiggy@icici. UPI Ref 429912345678"
+        )!!
+        assertEquals(TxnType.DEBIT, p.type)
+        assertEquals("swiggy@icici", p.vpa)
+    }
+
+    @Test
     fun ignoresOtpAndCollectRequests() {
         assertNull(UpiParser.parse("123456 is your OTP for UPI txn of Rs 500. Do not share."))
         assertNull(UpiParser.parse("RAMESH has requested Rs.500 from you via UPI. Pay in the app."))
