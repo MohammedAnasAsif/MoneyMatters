@@ -1,0 +1,63 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      # Keep the same debug signing key between runs so new APKs install over old ones.
+      - name: Reuse debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Unit tests and debug APK
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moneymatters-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          MM_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          MM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          MM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            export MM_KEYSTORE="$RUNNER_TEMP/release.jks"
+          fi
+          gradle --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "MoneyMatters-${GITHUB_REF_NAME}.apk"
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MoneyMatters-*.apk
+          generate_release_notes: true
