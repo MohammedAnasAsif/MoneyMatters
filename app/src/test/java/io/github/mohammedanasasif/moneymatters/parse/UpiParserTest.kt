@@ -120,6 +120,40 @@ class UpiParserTest {
     }
 
     @Test
+    fun ucoDebitWithoutPayeeIsStillConfident() {
+        val p = UpiParser.parse(
+            "A/c XX2378 Debited with Rs.500.00 on 25-10-2026 by UCO-UPI.Avl Bal Rs.54865.59. " +
+                "Report Dispute https://spgrs.ucoonline.bank.in/Home_Page.jsp"
+        )!!
+        assertEquals(50_000L, p.amountPaise)
+        assertEquals(TxnType.DEBIT, p.type)
+        assertNull(p.payee)
+        assertTrue(p.confident)
+    }
+
+    @Test
+    fun ucoCredit() {
+        val p = UpiParser.parse(
+            "A/c XX2378 Credited with Rs.1.00 on 26-10-2026 by UCO-UPI.Avl Bal Rs.54866.59. " +
+                "Report Dispute https://spgrs.ucoonline.bank.in/Home_Page.jsp"
+        )!!
+        assertEquals(100L, p.amountPaise)
+        assertEquals(TxnType.CREDIT, p.type)
+        assertTrue(p.confident)
+    }
+
+    @Test
+    fun phonePePaidYouWithFullName() {
+        val p = UpiParser.parse(
+            "Mohammed Anas Asif paid you ₹1.00. Payment from PhonePe",
+            requireUpiMarker = false,
+        )!!
+        assertEquals(100L, p.amountPaise)
+        assertEquals(TxnType.CREDIT, p.type)
+        assertEquals("Mohammed Anas Asif", p.payee)
+    }
+
+    @Test
     fun ignoresOtpAndCollectRequests() {
         assertNull(UpiParser.parse("123456 is your OTP for UPI txn of Rs 500. Do not share."))
         assertNull(UpiParser.parse("RAMESH has requested Rs.500 from you via UPI. Pay in the app."))

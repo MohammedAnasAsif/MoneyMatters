@@ -32,4 +32,9 @@ fun Transaction.displayName(): String =
     payee
         ?: vpa?.substringBefore('@')
         ?: note?.takeIf { it.isNotBlank() }
-        ?: if (source == TxnSource.MANUAL_CASH) "Cash" else "Unknown payee"
+        ?: when {
+            source == TxnSource.MANUAL_CASH -> "Cash"
+            // Some banks (e.g. UCO) never name the other party in their SMS.
+            type == TxnType.CREDIT -> "UPI money received"
+            else -> "UPI payment"
+        }

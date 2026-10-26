@@ -23,7 +23,7 @@ data class ParsedTxn(
  */
 object UpiParser {
     /** Bump when parsing changes, so stored payments are re-checked on the next app start. */
-    const val VERSION = 2
+    const val VERSION = 3
 
     private val I = RegexOption.IGNORE_CASE
 
@@ -72,6 +72,11 @@ object UpiParser {
     )
     private val WHITESPACE = Regex("""\s+""")
 
+    // "A/c XX2378 Debited with Rs.500.00 … by UCO-UPI": a masked account plus an explicit
+    // debited/credited is a real bank transaction even without a payee or reference number.
+    private val MASKED_ACCOUNT = Regex("""\ba/?c\.?\s*(?:no\.?\s*)?[x*]+\d{2,}""", I)
+    private val EXPLICIT_DIRECTION = Regex("""\b(debited|credited)\b""", I)
+
     /** Bank SMS come from alphanumeric sender IDs (e.g. "VM-HDFCBK"), never plain phone numbers. */
     fun isBankSender(address: String): Boolean = address.any { it.isLetter() }
 
@@ -100,7 +105,8 @@ object UpiParser {
             payee = payee,
             vpa = vpa,
             upiRef = ref,
-            confident = ref != null || payee != null || vpa != null,
+            confident = ref != null || payee != null || vpa != null ||
+                (MASKED_ACCOUNT.containsMatchIn(t) && EXPLICIT_DIRECTION.containsMatchIn(t)),
         )
     }
 
